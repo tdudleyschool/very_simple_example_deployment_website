@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    ports:
+      - "80:80"   # Expose frontend to host browser
+    depends_on:
+      - load_balancer
+    networks:
+      - lr_net
+
+  load_balancer:
+    build:
+      context: ./load_balancer
+    container_name: load_balancer
+    ports:
+      - "8080:8080"  # Expose to host for browser access
+    depends_on:
+      - lr1_service
+      - lr2_service
+    networks:
+      - lr_net
+
+  lr1_service:
+    build:
+      context: ./lr1_service
+    container_name: lr1_service
+    ports:
+      - "8001:8001"
+    networks:
+      - lr_net
+
+  lr2_service:
+    build:
+      context: ./lr2_service
+    container_name: lr2_service
+    ports:
+      - "8002:8002"
+    networks:
+      - lr_net
+
+networks:
+  lr_net:
+    driver: bridge
