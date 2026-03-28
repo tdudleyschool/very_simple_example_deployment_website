@@ -118,7 +118,7 @@ int main() {
         cv.notify_one();
 
         // ✅ wait for worker, timeout 5s
-        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+        if (future.wait_for(std::chrono::seconds(30)) == std::future_status::timeout) {
             nlohmann::json timeout_resp = {{"status","model_loading"}};
             res.set_header("Access-Control-Allow-Origin", "*");
             res.set_content(timeout_resp.dump(), "application/json");
