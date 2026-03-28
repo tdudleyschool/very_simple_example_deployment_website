@@ -4,8 +4,8 @@ const submitButton = document.getElementById('submitBtn');
 const outputField = document.getElementById('output');
 
 // ✅ REPLACED: Instead of window.location.hostname, use Render env variable
-// Render allows you to set environment variables per service
-const predictUrl = process.env.API_URL || 'http://localhost:8080/predict';
+// ✅ Use Render env variable for load balancer URL
+const predictUrl = window.API_URL || "https://load-balancer-tlqo.onrender.com/predict";
 
 async function sendPrediction(number, model) {
     try {

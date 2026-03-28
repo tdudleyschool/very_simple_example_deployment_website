@@ -18,6 +18,13 @@ std::mutex queue_mutex;
 std::condition_variable cv;
 
 void worker_thread() {
+    // !!! Read model URLs from environment variables
+    const char* lr1_url_env = std::getenv("LR1_URL");
+    const char* lr2_url_env = std::getenv("LR2_URL");
+
+    std::string lr1_url = lr1_url_env ? lr1_url_env : "http://localhost:8001";
+    std::string lr2_url = lr2_url_env ? lr2_url_env : "http://localhost:8002";
+
     while (true) {
         RequestTask task;
 
@@ -36,7 +43,7 @@ void worker_thread() {
 
             if (model == "LR1") {
                 //!!!need real render hostname. i think it has to match the name on render.
-                httplib::Client cli("lr1-service.onrender.internal", 8001);
+                httplib::Client cli(lr1_url.c_str());
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
@@ -45,8 +52,9 @@ void worker_thread() {
                 }
             }
             else if (model == "LR2") {
-                //!!!need real render hostname. i think it has to match the name on render.
-                httplib::Client cli("lr2-service.onrender.internal", 8002);
+                //!!!need real render hostname. i think it has to match the name on render. Get from env variables
+
+                httplib::Client cli(lr2_url.c_str());
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
@@ -66,6 +74,10 @@ void worker_thread() {
 
 int main() {
     httplib::Server svr;
+
+    //!!! For render Dynamic port from Render
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::stoi(port_env) : 8080;
 
     std::thread(worker_thread).detach();
 
@@ -95,9 +107,6 @@ int main() {
     });
 
    //!!! REPLACED PORT to use Render env variable if no env prot then just listen at 8080
-    const char* port_env = std::getenv("PORT");
-    int port = port_env ? std::stoi(port_env) : 8080;
-
     std::cout << "Load balancer running on port " << port << "..." << std::endl;
     svr.listen("0.0.0.0", port);
 }
