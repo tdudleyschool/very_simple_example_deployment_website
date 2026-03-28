@@ -43,7 +43,7 @@ void worker_thread() {
 
             if (model == "LR1") {
                 //!!!need real render hostname. i think it has to match the name on render.
-                httplib::Client cli(lr1_url.c_str());
+                httplib::SSLClient cli(lr1_url.c_str(), 433);
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
@@ -54,7 +54,7 @@ void worker_thread() {
             else if (model == "LR2") {
                 //!!!need real render hostname. i think it has to match the name on render. Get from env variables
 
-                httplib::Client cli(lr2_url.c_str());
+                httplib::SSLClient cli(lr2_url.c_str(), 433);
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
