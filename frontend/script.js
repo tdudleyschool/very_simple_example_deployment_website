@@ -3,7 +3,9 @@ const modelSelect = document.getElementById('modelSelect');
 const submitButton = document.getElementById('submitBtn');
 const outputField = document.getElementById('output');
 
-const predictUrl = 'http://localhost:8080/predict';
+// ✅ REPLACED: Instead of window.location.hostname, use Render env variable
+// Render allows you to set environment variables per service
+const predictUrl = process.env.API_URL || 'http://localhost:8080/predict';
 
 async function sendPrediction(number, model) {
     try {

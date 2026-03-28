@@ -20,3 +20,6 @@ RUN g++ main.cpp -o load_balancer -std=c++17 -pthread
 
 # Run load balancer
 CMD ["./load_balancer"]
+
+#!!! Expose port (Render will route traffic)
+EXPOSE 8080

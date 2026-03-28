@@ -3,6 +3,7 @@
 #include <thread>
 #include <condition_variable>
 #include <future>
+#include <cstdlib>   // for getenv from render
 #include "httplib.h"
 #include "json.hpp"
 #include <iostream>
@@ -34,7 +35,8 @@ void worker_thread() {
             double y = 0;
 
             if (model == "LR1") {
-                httplib::Client cli("lr1_service", 8001);
+                //!!!need real render hostname. i think it has to match the name on render.
+                httplib::Client cli("lr1-service.onrender.internal", 8001);
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
@@ -43,7 +45,8 @@ void worker_thread() {
                 }
             }
             else if (model == "LR2") {
-                httplib::Client cli("lr2_service", 8002);
+                //!!!need real render hostname. i think it has to match the name on render.
+                httplib::Client cli("lr2-service.onrender.internal", 8002);
                 nlohmann::json payload = {{"x", x}};
                 auto r = cli.Post("/predict", payload.dump(), "application/json");
 
@@ -91,6 +94,10 @@ int main() {
         res.set_content(result, "application/json");
     });
 
-    std::cout << "Load balancer (queue-based) running on port 8080..." << std::endl;
-    svr.listen("0.0.0.0", 8080);
+   //!!! REPLACED PORT to use Render env variable if no env prot then just listen at 8080
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::stoi(port_env) : 8080;
+
+    std::cout << "Load balancer running on port " << port << "..." << std::endl;
+    svr.listen("0.0.0.0", port);
 }
