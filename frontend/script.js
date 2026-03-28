@@ -2,32 +2,77 @@ const inputField = document.getElementById('numberInput');
 const modelSelect = document.getElementById('modelSelect');
 const submitButton = document.getElementById('submitBtn');
 const outputField = document.getElementById('output');
+const loadingOverlay = document.getElementById('loadingOverlay'); // a div overlay for loading
 
-// ✅ REPLACED: Instead of window.location.hostname, use Render env variable
 // ✅ Use Render env variable for load balancer URL
-const predictUrl = window.API_URL || "https://load-balancer-tlqo.onrender.com/predict";
+const backendUrl = window.API_URL || "https://load-balancer-tlqo.onrender.com";
 
-async function sendPrediction(number, model) {
-    try {
-        console.log("Sending request...");
+// ---------------------------
+// 1️⃣ Backend Ready Check
+// ---------------------------
+async function waitForBackendReady() {
+    loadingOverlay.style.display = "flex";
+    loadingOverlay.innerText = "Starting backend...";
 
-        const response = await fetch(predictUrl, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({x: number, model: model}) // ✅ FIXED
-        });
-
-        const data = await response.json();
-        outputField.innerText = `Prediction: ${data.y}`; // ✅ FIXED
-    } catch (err) {
-        console.error(err);
-        outputField.innerText = `Error: ${err.message}`;
+    while (true) {
+        try {
+            const res = await fetch(`${backendUrl}/ready`);
+            const data = await res.json();
+            if (data.status === "ok") break;
+        } catch (err) {
+            console.log("Backend not ready yet, retrying...");
+        }
+        await new Promise(r => setTimeout(r, 2000)); // retry every 2 sec
     }
+
+    loadingOverlay.style.display = "none";
 }
 
-submitButton.addEventListener('click', () => {
-    console.log("BUTTON CLICKED"); // 🔍 debug
+// Keep-alive ping every 5 min
+setInterval(async () => {
+    try {
+        await fetch(`${backendUrl}/ready`);
+    } catch {}
+}, 300_000); // 5 min
 
+// ---------------------------
+// 2️⃣ Prediction
+// ---------------------------
+async function sendPrediction(number, model) {
+    loadingOverlay.style.display = "flex";
+    loadingOverlay.innerText = "Predicting...";
+
+    while (true) {
+        try {
+            const response = await fetch(`${backendUrl}/predict`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({x: number, model: model})
+            });
+
+            const data = await response.json();
+
+            if (data.status === "model_loading") {
+                loadingOverlay.innerText = "Model is still loading, please wait...";
+                await new Promise(r => setTimeout(r, 2000));
+                continue; // retry
+            }
+
+            outputField.innerText = `Prediction: ${data.y}`;
+            break;
+        } catch (err) {
+            loadingOverlay.innerText = `Error: ${err.message}. Retrying...`;
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+
+    loadingOverlay.style.display = "none";
+}
+
+// ---------------------------
+// 3️⃣ Event Listener
+// ---------------------------
+submitButton.addEventListener('click', () => {
     const number = parseFloat(inputField.value);
     const model = modelSelect.value;
 
@@ -38,3 +83,8 @@ submitButton.addEventListener('click', () => {
 
     sendPrediction(number, model);
 });
+
+// ---------------------------
+// Initialize
+// ---------------------------
+waitForBackendReady();

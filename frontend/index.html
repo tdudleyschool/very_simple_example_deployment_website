@@ -1,27 +1,72 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Linear Regression Demo</title>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Full-page overlay for loading */
+    #loadingOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-size: 2em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      display: none; /* hidden by default */
+      text-align: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      padding: 20px;
+      max-width: 400px;
+      margin: 50px auto;
+      text-align: center;
+    }
+
+    input, select, button {
+      margin: 10px 0;
+      padding: 10px;
+      font-size: 1em;
+      width: 100%;
+    }
+
+    #output {
+      margin-top: 20px;
+      font-weight: bold;
+      font-size: 1.2em;
+    }
+  </style>
 </head>
 <body>
 
+  <!-- Loading overlay -->
+  <div id="loadingOverlay">Loading...</div>
+
   <div class="container">
     <h2>Linear Regression Demo</h2>
-
+    <input type="number" id="numberInput" placeholder="Enter a number" />
     <select id="modelSelect">
       <option value="LR1">LR1</option>
       <option value="LR2">LR2</option>
     </select>
-
-    <input type="number" id="numberInput" placeholder="Enter X">
-
     <button id="submitBtn">Predict</button>
-
-    <p id="output"></p>
+    <div id="output"></div>
   </div>
 
-  <script src="script.js" defer></script>
+  <script src="script.js"></script>
 </body>
 </html>
