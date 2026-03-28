@@ -11,12 +11,17 @@ WORKDIR /app
 # Copy main.cpp
 COPY main.cpp .
 
+#run this
+RUN apt-get update && \
+    apt-get install -y g++ wget libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # Download required headers
 RUN wget https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 RUN wget https://raw.githubusercontent.com/nlohmann/json/develop/single_include/nlohmann/json.hpp
 
 # Compile the load balancer
-RUN g++ main.cpp -o load_balancer -std=c++17 -pthread
+RUN g++ main.cpp -o load_balancer -std=c++17 -pthread -lssl -lcrypto
 
 # Run load balancer
 CMD ["./load_balancer"]
