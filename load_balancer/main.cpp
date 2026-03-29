@@ -23,8 +23,8 @@ void worker_thread() {
     const char* lr1_url_env = std::getenv("LR1_URL");
     const char* lr2_url_env = std::getenv("LR2_URL");
 
-    std::string lr1_url = lr1_url_env ? lr1_url_env : "localhost";
-    std::string lr2_url = lr2_url_env ? lr2_url_env : "localhost";
+    std::string lr1_url = lr1_url_env ? lr1_url_env : "lr1-service.onrender.com";
+    std::string lr2_url = lr2_url_env ? lr2_url_env : "lr2-service.onrender.com";
 
     while (true) {
         RequestTask task;
@@ -39,47 +39,37 @@ void worker_thread() {
             auto j = nlohmann::json::parse(task.body);
             std::string model = j["model"];
             double x = j["x"];
-            double y = 0;
 
-            httplib::SSLClient* cli = nullptr;
+            // Select correct model URL
+            std::string target_url = (model == "LR1") ? lr1_url : lr2_url;
 
-            // Determine which model to use
-            std::string url;
-            if (model == "LR1") url = lr1_url;
-            else if (model == "LR2") url = lr2_url;
-            else {
-                task.promise.set_value("{\"error\":\"invalid model\"}");
-                continue;
-            }
-
-            cli = new httplib::SSLClient(url.c_str(), 443);
-            cli->set_read_timeout(2,0);  // short timeout for warm-up
-            cli->set_write_timeout(2,0);
-
-            // 🔹 WARM-UP: spin up model if sleeping
-            try {
-                cli->Get("/predict");  // ignore result, just wakes service
-            } catch (...) {
-                // ignore
-            }
-
-            // 🔹 Actual prediction request with 5-second timeout
-            cli->set_read_timeout(5,0);
-            cli->set_write_timeout(5,0);
+            httplib::SSLClient cli(target_url.c_str(), 443);
+            cli.set_read_timeout(5,0);
+            cli.set_write_timeout(5,0);
 
             nlohmann::json payload = {{"x", x}};
-            auto r = cli->Post("/predict", payload.dump(), "application/json");
+            httplib::Result r;
 
+            // --- Step 1: Wake up model if needed ---
+            auto warmup = cli.Get("/predict");
+            if (!warmup) {
+                std::cout << "Model " << model << " may be asleep, waking up..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                warmup = cli.Get("/predict");
+            }
+
+            // --- Step 2: Send actual prediction ---
+            r = cli.Post("/predict", payload.dump(), "application/json");
+
+            // --- Step 3: Respond to frontend ---
             if (r && r->status == 200) {
-                y = nlohmann::json::parse(r->body)["y"];
+                double y = nlohmann::json::parse(r->body)["y"];
                 nlohmann::json response = {{"y", y}};
                 task.promise.set_value(response.dump());
             } else {
-                // model still not ready after timeout
+                // Model didn't respond in time
                 task.promise.set_value("{\"status\":\"model_loading\"}");
             }
-
-            delete cli;
 
         } catch (...) {
             task.promise.set_value("{\"error\":\"processing failed\"}");
