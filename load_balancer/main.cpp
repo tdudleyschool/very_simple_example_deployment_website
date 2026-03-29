@@ -23,8 +23,23 @@ void worker_thread() {
     const char* lr1_url_env = std::getenv("LR1_URL");
     const char* lr2_url_env = std::getenv("LR2_URL");
 
-    std::string lr1_url = lr1_url_env ? lr1_url_env : "lr1-service.onrender.com";
-    std::string lr2_url = lr2_url_env ? lr2_url_env : "lr2-service.onrender.com";
+    // --- Helper to clean URL ---
+    auto clean_url = [](std::string url) {
+        // remove https:// if present
+        if (url.find("https://") == 0) {
+            url = url.substr(8);
+        }
+        // remove trailing slash
+        if (!url.empty() && url.back() == '/') {
+            url.pop_back();
+        }
+        // remove whitespace
+        url.erase(remove_if(url.begin(), url.end(), ::isspace), url.end());
+        return url;
+    };
+
+    std::string lr1_url = clean_url(lr1_url_env ? lr1_url_env : "lr1-service.onrender.com");
+    std::string lr2_url = clean_url(lr2_url_env ? lr2_url_env : "lr2-service.onrender.com");
 
     while (true) {
         RequestTask task;
@@ -40,38 +55,68 @@ void worker_thread() {
             std::string model = j["model"];
             double x = j["x"];
 
-            // Select correct model URL
             std::string target_url = (model == "LR1") ? lr1_url : lr2_url;
 
+            std::cout << "\n==============================" << std::endl;
+            std::cout << "Request for model: " << model << std::endl;
+            std::cout << "Connecting to: [" << target_url << "]" << std::endl;
+
             httplib::SSLClient cli(target_url.c_str(), 443);
-            cli.set_read_timeout(5,0);
-            cli.set_write_timeout(5,0);
+            cli.set_read_timeout(10,0);
+            cli.set_write_timeout(10,0);
 
             nlohmann::json payload = {{"x", x}};
             httplib::Result r;
 
-            // --- Step 1: Wake up model if needed ---
-            auto warmup = cli.Get("/predict");
-            if (!warmup) {
-                std::cout << "Model " << model << " may be asleep, waking up..." << std::endl;
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                warmup = cli.Get("/predict");
+            bool success = false;
+
+            // --- Retry loop (up to ~30 seconds) ---
+            for (int attempt = 1; attempt <= 6; attempt++) {
+                std::cout << "Attempt " << attempt << " sending POST /predict..." << std::endl;
+
+                auto start = std::chrono::steady_clock::now();
+
+                r = cli.Post("/predict", payload.dump(), "application/json");
+
+                auto end = std::chrono::steady_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
+                if (r) {
+                    std::cout << "✅ Response received!" << std::endl;
+                    std::cout << "Status: " << r->status << std::endl;
+                    std::cout << "Time: " << duration << " sec" << std::endl;
+
+                    if (r->status == 200) {
+                        success = true;
+                        break;
+                    } else {
+                        std::cout << "⚠️ Non-200 status, retrying..." << std::endl;
+                    }
+                } else {
+                    std::cout << "❌ No response (likely sleeping or timeout)" << std::endl;
+                }
+
+                std::cout << "Waiting 5 seconds before retry...\n";
+                std::this_thread::sleep_for(std::chrono::seconds(5));
             }
 
-            // --- Step 2: Send actual prediction ---
-            r = cli.Post("/predict", payload.dump(), "application/json");
-
-            // --- Step 3: Respond to frontend ---
-            if (r && r->status == 200) {
+            // --- Final result ---
+            if (success) {
                 double y = nlohmann::json::parse(r->body)["y"];
                 nlohmann::json response = {{"y", y}};
                 task.promise.set_value(response.dump());
+
+                std::cout << "🎉 Model responded successfully\n";
             } else {
-                // Model didn't respond in time
                 task.promise.set_value("{\"status\":\"model_loading\"}");
+                std::cout << "⏳ Model still loading after retries\n";
             }
 
+        } catch (std::exception& e) {
+            std::cout << "❌ Exception: " << e.what() << std::endl;
+            task.promise.set_value("{\"error\":\"processing failed\"}");
         } catch (...) {
+            std::cout << "❌ Unknown error" << std::endl;
             task.promise.set_value("{\"error\":\"processing failed\"}");
         }
     }
