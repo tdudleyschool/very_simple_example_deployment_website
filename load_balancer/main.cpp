@@ -9,6 +9,7 @@
 #include "json.hpp"
 #include <iostream>
 #include <chrono>
+#include <map>
 
 struct RequestTask {
     std::string body;
@@ -19,30 +20,56 @@ std::queue<RequestTask> task_queue;
 std::mutex queue_mutex;
 std::condition_variable cv;
 
+// --- Model state tracking ---
+enum ModelState { READY, WAKING };
+std::map<std::string, ModelState> model_state = {
+    {"LR1", READY},
+    {"LR2", READY}
+};
+
+std::mutex model_mutex;
+std::condition_variable model_cv;
+
+// --- URL cleaner ---
+std::string clean_url(std::string url) {
+    if (url.find("https://") == 0) url = url.substr(8);
+    if (!url.empty() && url.back() == '/') url.pop_back();
+    url.erase(remove_if(url.begin(), url.end(), ::isspace), url.end());
+    return url;
+}
+
+bool try_request(httplib::SSLClient &cli, const nlohmann::json &payload, httplib::Result &r) {
+    r = cli.Post("/predict", payload.dump(), "application/json");
+
+    if (!r) {
+        std::cout << "❌ No response\n";
+        return false;
+    }
+
+    std::cout << "Status: " << r->status << std::endl;
+
+    if (r->status == 200) return true;
+
+    if (r->status == 429) {
+        std::cout << "🚫 Rate limited → sleeping 20s\n";
+        std::this_thread::sleep_for(std::chrono::seconds(20));
+        return false;
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    return false;
+}
+
 void worker_thread() {
-    const char* lr1_url_env = std::getenv("LR1_URL");
-    const char* lr2_url_env = std::getenv("LR2_URL");
+    const char* lr1_env = std::getenv("LR1_URL");
+    const char* lr2_env = std::getenv("LR2_URL");
 
-    // --- Helper to clean URL ---
-    auto clean_url = [](std::string url) {
-        // remove https:// if present
-        if (url.find("https://") == 0) {
-            url = url.substr(8);
-        }
-        // remove trailing slash
-        if (!url.empty() && url.back() == '/') {
-            url.pop_back();
-        }
-        // remove whitespace
-        url.erase(remove_if(url.begin(), url.end(), ::isspace), url.end());
-        return url;
-    };
-
-    std::string lr1_url = clean_url(lr1_url_env ? lr1_url_env : "lr1-service.onrender.com");
-    std::string lr2_url = clean_url(lr2_url_env ? lr2_url_env : "lr2-service.onrender.com");
+    std::string lr1_url = clean_url(lr1_env ? lr1_env : "lr1-service.onrender.com");
+    std::string lr2_url = clean_url(lr2_env ? lr2_env : "lr2-service.onrender.com");
 
     while (true) {
         RequestTask task;
+
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
             cv.wait(lock, [] { return !task_queue.empty(); });
@@ -55,68 +82,81 @@ void worker_thread() {
             std::string model = j["model"];
             double x = j["x"];
 
-            std::string target_url = (model == "LR1") ? lr1_url : lr2_url;
+            std::string url = (model == "LR1") ? lr1_url : lr2_url;
 
-            std::cout << "\n==============================" << std::endl;
-            std::cout << "Request for model: " << model << std::endl;
-            std::cout << "Connecting to: [" << target_url << "]" << std::endl;
+            std::cout << "\n=== REQUEST ===\n";
+            std::cout << "Model: " << model << "\nURL: " << url << "\n";
 
-            httplib::SSLClient cli(target_url.c_str(), 443);
-            cli.set_read_timeout(10,0);
-            cli.set_write_timeout(10,0);
+            httplib::SSLClient cli(url.c_str(), 443);
+            cli.set_read_timeout(15,0);
+            cli.set_write_timeout(15,0);
 
             nlohmann::json payload = {{"x", x}};
             httplib::Result r;
 
+            // --- MODEL LOCK ---
+            {
+                std::unique_lock<std::mutex> lock(model_mutex);
+
+                if (model_state[model] == WAKING) {
+                    std::cout << "⏳ Model already waking, waiting...\n";
+                    model_cv.wait(lock, [&] { return model_state[model] == READY; });
+                    std::cout << "✅ Model ready (wait finished)\n";
+                } else {
+                    std::cout << "🚀 This thread will wake model\n";
+                    model_state[model] = WAKING;
+                }
+            }
+
             bool success = false;
 
-            // --- Retry loop (up to ~30 seconds) ---
-            for (int attempt = 1; attempt <= 6; attempt++) {
-                std::cout << "Attempt " << attempt << " sending POST /predict..." << std::endl;
+            // --- ONLY ONE THREAD DOES THIS ---
+            {
+                std::unique_lock<std::mutex> lock(model_mutex, std::defer_lock);
+                lock.lock();
 
-                auto start = std::chrono::steady_clock::now();
+                if (model_state[model] == WAKING) {
+                    lock.unlock();
 
-                r = cli.Post("/predict", payload.dump(), "application/json");
+                    std::cout << "🔥 Waking model (slow retry loop)\n";
 
-                auto end = std::chrono::steady_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+                    for (int i = 1; i <= 4; i++) {
+                        std::cout << "Wake attempt " << i << "\n";
 
-                if (r) {
-                    std::cout << "✅ Response received!" << std::endl;
-                    std::cout << "Status: " << r->status << std::endl;
-                    std::cout << "Time: " << duration << " sec" << std::endl;
-
-                    if (r->status == 200) {
-                        success = true;
-                        break;
-                    } else {
-                        std::cout << "⚠️ Non-200 status, retrying..." << std::endl;
+                        if (try_request(cli, payload, r)) {
+                            success = true;
+                            break;
+                        }
                     }
-                } else {
-                    std::cout << "❌ No response (likely sleeping or timeout)" << std::endl;
-                }
 
-                std::cout << "Waiting 5 seconds before retry...\n";
-                std::this_thread::sleep_for(std::chrono::seconds(5));
+                    lock.lock();
+                    model_state[model] = READY;
+                    lock.unlock();
+
+                    model_cv.notify_all();
+                } else {
+                    lock.unlock();
+                }
             }
 
-            // --- Final result ---
+            // --- If not success yet, try once normally ---
+            if (!success) {
+                std::cout << "🔁 Final attempt after wake\n";
+                success = try_request(cli, payload, r);
+            }
+
+            // --- RESPONSE ---
             if (success) {
                 double y = nlohmann::json::parse(r->body)["y"];
-                nlohmann::json response = {{"y", y}};
-                task.promise.set_value(response.dump());
-
-                std::cout << "🎉 Model responded successfully\n";
+                task.promise.set_value(nlohmann::json{{"y", y}}.dump());
+                std::cout << "🎉 SUCCESS\n";
             } else {
                 task.promise.set_value("{\"status\":\"model_loading\"}");
-                std::cout << "⏳ Model still loading after retries\n";
+                std::cout << "⏳ STILL LOADING\n";
             }
 
-        } catch (std::exception& e) {
-            std::cout << "❌ Exception: " << e.what() << std::endl;
-            task.promise.set_value("{\"error\":\"processing failed\"}");
-        } catch (...) {
-            std::cout << "❌ Unknown error" << std::endl;
+        } catch (std::exception &e) {
+            std::cout << "❌ Exception: " << e.what() << "\n";
             task.promise.set_value("{\"error\":\"processing failed\"}");
         }
     }
@@ -128,7 +168,10 @@ int main() {
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::stoi(port_env) : 8080;
 
-    std::thread(worker_thread).detach();
+    // Multiple workers (important)
+    for (int i = 0; i < 3; i++) {
+        std::thread(worker_thread).detach();
+    }
 
     svr.Options("/predict", [](const httplib::Request&, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
@@ -138,7 +181,7 @@ int main() {
 
     svr.Post("/predict", [](const httplib::Request& req, httplib::Response& res) {
         std::promise<std::string> promise;
-        std::future<std::string> future = promise.get_future();
+        auto future = promise.get_future();
 
         {
             std::lock_guard<std::mutex> lock(queue_mutex);
@@ -147,8 +190,8 @@ int main() {
 
         cv.notify_one();
 
-        // Wait up to 5 seconds for worker thread
-        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
+        // wait longer (important!)
+        if (future.wait_for(std::chrono::seconds(40)) == std::future_status::ready) {
             res.set_content(future.get(), "application/json");
         } else {
             res.set_content("{\"status\":\"model_loading\"}", "application/json");
@@ -157,6 +200,6 @@ int main() {
         res.set_header("Access-Control-Allow-Origin", "*");
     });
 
-    std::cout << "Load balancer running on port " << port << "..." << std::endl;
+    std::cout << "Load balancer running on port " << port << "...\n";
     svr.listen("0.0.0.0", port);
 }
